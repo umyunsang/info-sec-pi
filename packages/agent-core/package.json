@@ -1,0 +1,40 @@
+{
+  "name": "@info-sec-pi/agent-core",
+  "version": "0.1.0",
+  "description": "Info Sec Pi agent loop, derived from Pi Agent Core",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/core.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-schema": "1.6.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "1.6.0",
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  },
+  "bundleDependencies": [
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-schema"
+  ]
+}
