@@ -1,0 +1,152 @@
+name: Release isp
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, arch: x64, target: linux-x64 }
+          - { os: ubuntu-22.04-arm, arch: arm64, target: linux-arm64 }
+          - { os: macos-15, arch: arm64, target: darwin-arm64 }
+          - { os: macos-15-intel, arch: x64, target: darwin-x64 }
+          - { os: windows-2025, arch: x64, target: windows-x64 }
+          - { os: windows-11-arm, arch: arm64, target: windows-arm64 }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/agent-core/package-lock.json
+      - name: Check version
+        run: >-
+          node -e "const p = require('./package.json');
+          if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== 'v' + p.version)
+          throw new Error('The tag must match package.json version ' + p.version);"
+      - run: npm ci
+      - run: npm --prefix packages/agent-core ci
+      - run: npm test
+      - name: Pack the platform archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/npm release/platform
+          npm pkg set repository.type=git "repository.url=git+https://github.com/$GITHUB_REPOSITORY.git"
+          npm pack --json --pack-destination release/npm > pack.json
+          package="release/npm/$(node -p "require('./pack.json')[0].filename")"
+          node scripts/package-release.mjs --package "$package" --out release/platform
+      - name: Run the platform archive on macOS or Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find release/platform -type f ! -name '*.sha256')"
+          mkdir -p release/smoke
+          tar -xf "$archive" -C release/smoke
+          launcher=release/smoke/isp/bin/isp
+          expected="$(node -p "require('./package.json').version")"
+          [[ "$(PATH=/usr/bin:/bin "$launcher" --version)" == "$expected" ]]
+          PATH=/usr/bin:/bin "$launcher" examples list | awk 'END { exit (NR != 94) }'
+      - name: Run the platform archive on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem release/platform -Filter *.zip
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath release/smoke
+          $launcher = '.\release\smoke\isp\bin\isp.cmd'
+          $expected = node -p "require('./package.json').version"
+          $actual = & $launcher --version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) { throw "The launcher reported $actual" }
+          $examples = & $launcher examples list
+          if ($LASTEXITCODE -ne 0 -or $examples.Count -ne 94) { throw 'The example catalog is incomplete.' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isp-${{ matrix.target }}
+          path: release/platform/*
+          if-no-files-found: error
+      - name: Pack the agent core
+        if: matrix.target == 'linux-x64'
+        working-directory: packages/agent-core
+        run: npm pack --pack-destination ../../release/npm
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'linux-x64'
+        with:
+          name: npm-packages
+          path: release/npm/*.tgz
+          if-no-files-found: error
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.22.3'
+      - name: Assemble the release assets
+        run: node scripts/release-metadata.mjs release
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          flags=()
+          if [[ "$tag" == *-* ]]; then flags+=(--prerelease); fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == false ]]; then
+              echo "Release $tag is already public."
+              exit 0
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes "${flags[@]}"
+          fi
+          gh release upload "$tag" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  npm-publish:
+    if: github.ref_type == 'tag' && vars.PUBLISH_NPM == 'true'
+    needs: github-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: release
+      - name: Publish the CLI through npm trusted publishing
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          dist_tag="$(node -p "require('./package.json').version.split('-')[1]?.split('.')[0] || 'latest'")"
+          npm publish "release/info-sec-pi-isp-$version.tgz" --access public --tag "$dist_tag"
