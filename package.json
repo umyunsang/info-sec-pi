@@ -1,0 +1,40 @@
+{
+  "name": "@info-sec-pi/isp",
+  "version": "0.3.0-alpha.4",
+  "description": "info-sec-pi, a terminal coding assistant with subagents built on Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umyunsang/info-sec-pi.git"
+  },
+  "type": "module",
+  "bin": {
+    "isp": "./bin/isp.js"
+  },
+  "piConfig": {
+    "name": "isp",
+    "configDir": ".isp"
+  },
+  "files": [
+    "bin",
+    "src",
+    "licenses",
+    "packages/agent-core/dist",
+    "packages/agent-core/package.json",
+    "packages/agent-core/LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "start": "node bin/isp.js",
+    "build": "npm --prefix packages/agent-core run build",
+    "test": "npm --prefix packages/agent-core test && node --test test/cli.test.js test/core-binding.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.6.0"
+  },
+  "bundleDependencies": [
+    "@earendil-works/pi-coding-agent"
+  ]
+}
